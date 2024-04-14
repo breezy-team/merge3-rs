@@ -368,6 +368,87 @@ impl<T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<T> {
 
         ret
     }
+
+    /// Return a list of ranges in base that are not conflicted.
+    pub fn find_unconflicted(&self) -> Vec<(usize, usize)> {
+        let mut am = (self.get_matching_blocks)(&self.base, &self.a);
+        let mut bm = (self.get_matching_blocks)(&self.base, &self.b);
+
+        let mut ret = vec![];
+
+        while !am.is_empty() && !bm.is_empty() {
+            let a1 = am[0].first_start;
+            let a2 = am[0].first_start + am[0].size;
+            let b1 = bm[0].first_start;
+            let b2 = bm[0].first_start + bm[0].size;
+
+            let i = intersect((a1, a2), (b1, b2));
+
+            if let Some((start, end)) = i {
+                ret.push((start, end));
+            }
+
+            if a2 < b2 {
+                am.remove(0);
+            } else {
+                bm.remove(0);
+            }
+        }
+        ret
+    }
+
+    /// Where there are conflict regions, remove the agreed lines.
+    ///
+    /// Lines where both A and B have made the same changes are
+    /// eliminated.
+    pub fn reprocess_merge_regions(
+        &self,
+        merge_regions: Vec<SelectedRegion>,
+    ) -> Vec<SelectedRegion> {
+        let mut ret = vec![];
+        for region in merge_regions {
+            if let SelectedRegion::Conflict {
+                zstart,
+                zend,
+                astart,
+                aend,
+                bstart,
+                bend,
+            } = region
+            {
+                let a_region = &self.a[astart..aend];
+                let b_region = &self.b[bstart..bend];
+                let mut matches = (self.get_matching_blocks)(&a_region, &b_region);
+                let mut next_a = astart;
+                let mut next_b = bstart;
+                // Drop last item from matches
+                matches.pop();
+                for m in matches {
+                    let region_ia = m.first_start + astart;
+                    let region_ib = m.second_start + bstart;
+
+                    if let Some(reg) = mismatch_region(next_a, region_ia, next_b, region_ib) {
+                        ret.push(reg);
+                    }
+
+                    ret.push(SelectedRegion::Unchanged {
+                        start: region_ia,
+                        end: region_ia + m.size,
+                    });
+
+                    next_a = region_ia + m.size;
+                    next_b = region_ib + m.size;
+                }
+
+                if let Some(reg) = mismatch_region(next_a, aend, next_b, bend) {
+                    ret.push(reg);
+                }
+            } else {
+                ret.push(region);
+            }
+        }
+        ret
+    }
 }
 
 enum SelectedRegion {
@@ -397,7 +478,7 @@ enum SelectedRegion {
     },
 }
 
-fn mismatch_region<T: PartialEq + std::fmt::Debug>(
+fn mismatch_region(
     next_a: usize,
     region_ia: usize,
     next_b: usize,
