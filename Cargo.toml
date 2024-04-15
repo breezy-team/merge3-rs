@@ -5,6 +5,7 @@ edition = "2021"
 description = "A simple merge tool for three-way merges"
 license = "Apache-2.0"
 maintainers = [{name = "Breezy Developers", email = "team@breezy-vcs.org"}]
+repository = "https://github.com/breezy-team/merge3-rs"
 
 [dependencies]
 difflib = "0.4.0"
