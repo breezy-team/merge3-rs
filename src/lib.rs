@@ -210,8 +210,8 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
     pub fn find_sync_regions(&self) -> Vec<(usize, usize, usize, usize, usize, usize)> {
         let mut ia = 0;
         let mut ib = 0;
-        let amatches = (self.get_matching_blocks)(&self.base, &self.a);
-        let bmatches = (self.get_matching_blocks)(&self.base, &self.b);
+        let amatches = (self.get_matching_blocks)(self.base, self.a);
+        let bmatches = (self.get_matching_blocks)(self.base, self.b);
 
         let mut sl = vec![];
 
@@ -304,8 +304,8 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
                 ret.push(MergeRegion::Conflict {
                     zstart: Some(zstart + last_base_idx),
                     zend: Some(zstart + base_idx),
-                    astart: astart,
-                    aend: aend,
+                    astart,
+                    aend,
                     bstart: bstart + last_b_idx,
                     bend: bstart + b_idx,
                 });
@@ -329,8 +329,8 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
                 ret.push(MergeRegion::Conflict {
                     zstart: Some(zstart + last_base_idx),
                     zend: Some(zstart + matches.last().unwrap().first_start),
-                    astart: astart,
-                    aend: aend,
+                    astart,
+                    aend,
                     bstart: bstart + last_b_idx,
                     bend: bstart + matches.last().unwrap().second_start,
                 });
@@ -340,10 +340,10 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
             ret.push(MergeRegion::Conflict {
                 zstart: Some(zstart),
                 zend: Some(zend),
-                astart: astart,
-                aend: aend,
-                bstart: bstart,
-                bend: bend,
+                astart,
+                aend,
+                bstart,
+                bend,
             });
         }
 
@@ -352,8 +352,8 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
 
     /// Return a list of ranges in base that are not conflicted.
     pub fn find_unconflicted(&self) -> Vec<(usize, usize)> {
-        let mut am = (self.get_matching_blocks)(&self.base, &self.a);
-        let mut bm = (self.get_matching_blocks)(&self.base, &self.b);
+        let mut am = (self.get_matching_blocks)(self.base, self.a);
+        let mut bm = (self.get_matching_blocks)(self.base, self.b);
 
         let mut ret = vec![];
 
@@ -398,7 +398,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
             {
                 let a_region = &self.a[astart..aend];
                 let b_region = &self.b[bstart..bend];
-                let mut matches = (self.get_matching_blocks)(&a_region, &b_region);
+                let mut matches = (self.get_matching_blocks)(a_region, b_region);
                 let mut next_a = astart;
                 let mut next_b = bstart;
                 // Drop last item from matches
@@ -446,7 +446,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
     ///
     /// 'conflict', base_lines, a_lines, b_lines
     ///      Lines from base were changed to either a or b and conflict.
-    pub fn merge_groups<'a>(&'a self) -> Vec<MergeGroup<'a, T>> {
+    pub fn merge_groups(&self) -> Vec<MergeGroup<'_, T>> {
         let mut ret = vec![];
         for m in self.merge_regions() {
             match m {
@@ -1370,27 +1370,27 @@ mod merge3_tests {
     }
 
     /* TODO
-        /// Objects other than strs may be used with Merge3.
-        ///
-        /// merge_groups and merge_regions work with non-str input.  Methods that
-        /// return lines like merge_lines fail.
-        #[test]
-        fn test_allow_objects() {
-            base = [(int2byte(x), int2byte(x)) for x in bytearray(b"abcde")]
-            a = [(int2byte(x), int2byte(x)) for x in bytearray(b"abcdef")]
-            b = [(int2byte(x), int2byte(x)) for x in bytearray(b"Zabcde")]
-            m3 = merge3.Merge3(base, a, b)
-            assert_eq!(
-                [("b", 0, 1),
-                 ("unchanged", 0, 5),
-                 ("a", 5, 6)],
-                list(m3.merge_regions()))
-            assert_eq!(
-                [("b", [(b"Z", b"Z")]),
-                 ("unchanged", [
-                     (int2byte(x), int2byte(x)) for x in bytearray(b"abcde")]),
-                 ("a", [(b"f", b"f")])],
-                list(m3.merge_groups()))
-        }
+    /// Objects other than strs may be used with Merge3.
+    ///
+    /// merge_groups and merge_regions work with non-str input.  Methods that
+    /// return lines like merge_lines fail.
+    #[test]
+    fn test_allow_objects() {
+        base = [(int2byte(x), int2byte(x)) for x in bytearray(b"abcde")]
+        a = [(int2byte(x), int2byte(x)) for x in bytearray(b"abcdef")]
+        b = [(int2byte(x), int2byte(x)) for x in bytearray(b"Zabcde")]
+        m3 = merge3.Merge3(base, a, b)
+        assert_eq!(
+            [("b", 0, 1),
+             ("unchanged", 0, 5),
+             ("a", 5, 6)],
+            list(m3.merge_regions()))
+        assert_eq!(
+            vec![("b", [(b"Z", b"Z")]),
+             ("unchanged", [
+                 (int2byte(x), int2byte(x)) for x in bytearray(b"abcde")]),
+             ("a", [(b"f", b"f")])],
+            list(m3.merge_groups()))
+    }
     */
 }
