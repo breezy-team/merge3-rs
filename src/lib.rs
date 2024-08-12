@@ -606,7 +606,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum MergeRegion {
+pub enum MergeRegion {
     Unchanged {
         start: usize,
         end: usize,
