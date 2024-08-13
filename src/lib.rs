@@ -1,4 +1,5 @@
 use difflib::sequencematcher::{Match, SequenceMatcher};
+use std::borrow::Cow;
 
 /// Given two ranges, return the range where they intersect or None.
 fn intersect(ra: (usize, usize), rb: (usize, usize)) -> Option<(usize, usize)> {
@@ -524,21 +525,21 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
                     bstart,
                     bend,
                 } => {
-                    ret.push(std::borrow::Cow::Borrowed(markers.start_marker()));
+                    ret.push(markers.start_marker());
                     for i in astart..aend {
                         ret.push(std::borrow::Cow::Borrowed(&self.a[i]));
                     }
                     if let Some(zstart) = zstart {
-                        ret.push(std::borrow::Cow::Borrowed(markers.base_marker()));
+                        ret.push(markers.base_marker());
                         for i in zstart..zend.unwrap() {
                             ret.push(std::borrow::Cow::Borrowed(&self.base[i]));
                         }
                     }
-                    ret.push(std::borrow::Cow::Borrowed(markers.mid_marker()));
+                    ret.push(markers.mid_marker());
                     for i in bstart..bend {
                         ret.push(std::borrow::Cow::Borrowed(&self.b[i]));
                     }
-                    ret.push(std::borrow::Cow::Borrowed(markers.end_marker()));
+                    ret.push(markers.end_marker());
                 }
             }
         }
@@ -671,11 +672,11 @@ fn mismatch_region(
     }
 }
 
-pub trait LineMarkers<'a, T> {
-    fn start_marker(&self) -> &'a T;
-    fn base_marker(&self) -> &'a T;
-    fn mid_marker(&self) -> &'a T;
-    fn end_marker(&self) -> &'a T;
+pub trait LineMarkers<'a, T: Clone> {
+    fn start_marker(&self) -> Cow<'a, T>;
+    fn base_marker(&self) -> Cow<'a, T>;
+    fn mid_marker(&self) -> Cow<'a, T>;
+    fn end_marker(&self) -> Cow<'a, T>;
 }
 
 pub trait AnnotationMarkers<'a, T> {
