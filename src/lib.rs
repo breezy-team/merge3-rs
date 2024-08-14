@@ -38,27 +38,48 @@ fn compare_range<T: PartialEq>(
 /// Given BASE, OTHER, THIS, tries to produce a combined text incorporating the changes from both
 /// BASE->OTHER and BASE->THIS.  All three will typically be sequences of lines.
 
-pub struct Merge3<'b, T: Eq + std::hash::Hash> {
+pub struct Merge3<'b, T: Eq + std::hash::Hash + ?Sized> {
     // Lines in BASE
-    base: &'b [T],
+    base: &'b [&'b T],
     // lines in A
-    a: &'b [T],
+    a: &'b [&'b T],
     // lines in B
-    b: &'b [T],
+    b: &'b [&'b T],
     // flag indicating if this merge is a cherrypick.  When cherrypicking b => a, matches with b
     // and base do not conflict.
     is_cherrypick: bool,
-    get_matching_blocks: fn(&[T], &[T]) -> Vec<Match>,
+    get_matching_blocks: fn(&[&T], &[&T]) -> Vec<Match>,
 }
 
-impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
-    pub fn new(base: &'b [T], a: &'b [T], b: &'b [T]) -> Merge3<'b, T> {
+impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
+    pub fn new(base: &'b [&'b T], a: &'b [&'b T], b: &'b [&'b T]) -> Merge3<'b, T> {
         Merge3 {
             base,
             a,
             b,
             is_cherrypick: false,
             get_matching_blocks: |a, b| SequenceMatcher::new(a, b).get_matching_blocks(),
+        }
+    }
+
+    #[cfg(feature = "patiencediff")]
+    pub fn with_patience_diff(base: &'b [&'b T], a: &'b [&'b T], b: &'b [&'b T]) -> Merge3<'b, T> {
+        Merge3 {
+            base,
+            a,
+            b,
+            is_cherrypick: false,
+            get_matching_blocks: |a, b| {
+                patiencediff::SequenceMatcher::new(a, b)
+                    .get_matching_blocks()
+                    .iter()
+                    .map(|(first_start, second_start, size)| Match {
+                        first_start: *first_start,
+                        second_start: *second_start,
+                        size: *size,
+                    })
+                    .collect()
+            },
         }
     }
 
@@ -418,7 +439,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
     ///
     /// 'conflict', base_lines, a_lines, b_lines
     ///      Lines from base were changed to either a or b and conflict.
-    pub fn merge_groups(&self) -> Vec<MergeGroup<'_, T>> {
+    pub fn merge_groups(&self) -> Vec<MergeGroup<'_, &T>> {
         let mut ret = vec![];
         for m in self.merge_regions() {
             match m {
@@ -452,40 +473,49 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
         ret
     }
 
+    /// Return merge in CVS-style format.
+    ///
+    /// # Arguments
+    /// * `reprocess` - If true, remove lines where a and b are the same.
+    /// * `markers` - LineMarkers implementation to provide markers for the merge.
     pub fn merge_lines<'a>(
         &'b self,
         reprocess: bool,
         markers: &impl LineMarkers<'a, T>,
     ) -> Vec<std::borrow::Cow<'a, T>>
     where
-        T: Clone,
+        T: ToOwned,
         'b: 'a,
     {
         let mut merge_regions = self.merge_regions();
         if reprocess {
             merge_regions = self.reprocess_merge_regions(merge_regions);
+            assert!(
+                markers.base_marker().is_none(),
+                "base marker in reprocessed merge"
+            );
         }
         let mut ret: Vec<std::borrow::Cow<T>> = vec![];
         for m in merge_regions {
             match m {
                 MergeRegion::Unchanged { start, end } => {
                     for i in start..end {
-                        ret.push(std::borrow::Cow::Borrowed(&self.base[i]));
+                        ret.push(std::borrow::Cow::Borrowed(self.base[i]));
                     }
                 }
                 MergeRegion::Same { astart, aend } => {
                     for i in astart..aend {
-                        ret.push(std::borrow::Cow::Borrowed(&self.a[i]));
+                        ret.push(std::borrow::Cow::Borrowed(self.a[i]));
                     }
                 }
                 MergeRegion::A { start, end } => {
                     for i in start..end {
-                        ret.push(std::borrow::Cow::Borrowed(&self.a[i]));
+                        ret.push(std::borrow::Cow::Borrowed(self.a[i]));
                     }
                 }
                 MergeRegion::B { start, end } => {
                     for i in start..end {
-                        ret.push(std::borrow::Cow::Borrowed(&self.b[i]));
+                        ret.push(std::borrow::Cow::Borrowed(self.b[i]));
                     }
                 }
                 MergeRegion::Conflict {
@@ -496,21 +526,29 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
                     bstart,
                     bend,
                 } => {
-                    ret.push(markers.start_marker());
+                    if let Some(start_marker) = markers.start_marker() {
+                        ret.push(start_marker);
+                    }
                     for i in astart..aend {
-                        ret.push(std::borrow::Cow::Borrowed(&self.a[i]));
+                        ret.push(std::borrow::Cow::Borrowed(self.a[i]));
                     }
                     if let Some(zstart) = zstart {
-                        ret.push(markers.base_marker());
+                        if let Some(base_marker) = markers.base_marker() {
+                            ret.push(base_marker);
+                        }
                         for i in zstart..zend.unwrap() {
-                            ret.push(std::borrow::Cow::Borrowed(&self.base[i]));
+                            ret.push(std::borrow::Cow::Borrowed(self.base[i]));
                         }
                     }
-                    ret.push(markers.mid_marker());
-                    for i in bstart..bend {
-                        ret.push(std::borrow::Cow::Borrowed(&self.b[i]));
+                    if let Some(mid_marker) = markers.mid_marker() {
+                        ret.push(mid_marker);
                     }
-                    ret.push(markers.end_marker());
+                    for i in bstart..bend {
+                        ret.push(std::borrow::Cow::Borrowed(self.b[i]));
+                    }
+                    if let Some(end_marker) = markers.end_marker() {
+                        ret.push(end_marker);
+                    }
                 }
             }
         }
@@ -529,22 +567,22 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
             match m {
                 MergeRegion::Unchanged { start, end } => {
                     for i in start..end {
-                        ret.push(markers.unchanged_line(&self.base[i]));
+                        ret.push(markers.unchanged_line(self.base[i]));
                     }
                 }
                 MergeRegion::Same { astart, aend } => {
                     for i in astart..aend {
-                        ret.push(markers.a_line(&self.a[i]));
+                        ret.push(markers.a_line(self.a[i]));
                     }
                 }
                 MergeRegion::A { start, end } => {
                     for i in start..end {
-                        ret.push(markers.a_line(&self.a[i]));
+                        ret.push(markers.a_line(self.a[i]));
                     }
                 }
                 MergeRegion::B { start, end } => {
                     for i in start..end {
-                        ret.push(markers.b_line(&self.b[i]));
+                        ret.push(markers.b_line(self.b[i]));
                     }
                 }
                 MergeRegion::Conflict {
@@ -557,17 +595,17 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
                 } => {
                     ret.push(markers.start_marker());
                     for i in astart..aend {
-                        ret.push(markers.a_line(&self.a[i]));
+                        ret.push(markers.a_line(self.a[i]));
                     }
                     if let Some(zstart) = zstart {
                         ret.push(markers.base_marker());
                         for i in zstart..zend.unwrap() {
-                            ret.push(markers.base_line(&self.base[i]));
+                            ret.push(markers.base_line(self.base[i]));
                         }
                     }
                     ret.push(markers.mid_marker());
                     for i in bstart..bend {
-                        ret.push(markers.b_line(&self.b[i]));
+                        ret.push(markers.b_line(self.b[i]));
                     }
                     ret.push(markers.end_marker());
                 }
@@ -643,11 +681,152 @@ fn mismatch_region(
     }
 }
 
-pub trait LineMarkers<'a, T: Clone> {
-    fn start_marker(&self) -> Cow<'a, T>;
-    fn base_marker(&self) -> Cow<'a, T>;
-    fn mid_marker(&self) -> Cow<'a, T>;
-    fn end_marker(&self) -> Cow<'a, T>;
+pub trait LineMarkers<'a, T: ToOwned + ?Sized> {
+    fn start_marker(&self) -> Option<Cow<'a, T>>;
+    fn base_marker(&self) -> Option<Cow<'a, T>>;
+    fn mid_marker(&self) -> Option<Cow<'a, T>>;
+    fn end_marker(&self) -> Option<Cow<'a, T>>;
+}
+
+#[derive(Default)]
+pub struct FixedMarkers<'a> {
+    other_name: Option<&'a str>,
+    this_name: Option<&'a str>,
+    base_name: Option<&'a str>,
+}
+
+impl<'a> FixedMarkers<'a> {
+    pub fn new(
+        other_name: Option<&'a str>,
+        this_name: Option<&'a str>,
+        base_name: Option<&'a str>,
+    ) -> Self {
+        FixedMarkers {
+            other_name,
+            this_name,
+            base_name,
+        }
+    }
+}
+
+impl<'a> LineMarkers<'a, str> for FixedMarkers<'a> {
+    fn start_marker(&self) -> Option<Cow<'a, str>> {
+        if let Some(name) = self.other_name {
+            Some(Cow::Owned(format!("<<<<<<< {}\n", name)))
+        } else {
+            Some(Cow::Borrowed("<<<<<<<\n"))
+        }
+    }
+
+    fn base_marker(&self) -> Option<Cow<'a, str>> {
+        if let Some(name) = self.base_name {
+            Some(Cow::Owned(format!("======= {}\n", name)))
+        } else {
+            Some(Cow::Borrowed("=======\n"))
+        }
+    }
+
+    fn mid_marker(&self) -> Option<Cow<'a, str>> {
+        None
+    }
+
+    fn end_marker(&self) -> Option<Cow<'a, str>> {
+        if let Some(name) = self.this_name {
+            Some(Cow::Owned(format!(">>>>>>> {}\n", name)))
+        } else {
+            Some(Cow::Borrowed(">>>>>>>\n"))
+        }
+    }
+}
+
+impl<'a> LineMarkers<'a, [u8]> for FixedMarkers<'a> {
+    fn start_marker(&self) -> Option<Cow<'a, [u8]>> {
+        if let Some(name) = self.other_name {
+            Some(Cow::Owned(format!("<<<<<<< {}\n", name).into_bytes()))
+        } else {
+            Some(Cow::Borrowed("<<<<<<<\n".as_bytes()))
+        }
+    }
+
+    fn base_marker(&self) -> Option<Cow<'a, [u8]>> {
+        if let Some(name) = self.base_name {
+            Some(Cow::Owned(format!("======= {}\n", name).into_bytes()))
+        } else {
+            Some(Cow::Borrowed("=======\n".as_bytes()))
+        }
+    }
+
+    fn mid_marker(&self) -> Option<Cow<'a, [u8]>> {
+        None
+    }
+
+    fn end_marker(&self) -> Option<Cow<'a, [u8]>> {
+        if let Some(name) = self.this_name {
+            Some(Cow::Owned(format!(">>>>>>> {}\n", name).into_bytes()))
+        } else {
+            Some(Cow::Borrowed(">>>>>>>\n".as_bytes()))
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct CustomMarkers<'a> {
+    pub start_marker: Option<&'a str>,
+    pub base_marker: Option<&'a str>,
+    pub mid_marker: Option<&'a str>,
+    pub end_marker: Option<&'a str>,
+}
+
+impl<'a> CustomMarkers<'a> {
+    pub fn new(
+        start_marker: Option<&'a str>,
+        base_marker: Option<&'a str>,
+        mid_marker: Option<&'a str>,
+        end_marker: Option<&'a str>,
+    ) -> Self {
+        CustomMarkers {
+            start_marker,
+            base_marker,
+            mid_marker,
+            end_marker,
+        }
+    }
+}
+
+impl<'a> LineMarkers<'a, str> for CustomMarkers<'a> {
+    fn start_marker(&self) -> Option<Cow<'a, str>> {
+        self.start_marker.map(Cow::Borrowed)
+    }
+
+    fn base_marker(&self) -> Option<Cow<'a, str>> {
+        self.base_marker.map(Cow::Borrowed)
+    }
+
+    fn mid_marker(&self) -> Option<Cow<'a, str>> {
+        self.mid_marker.map(Cow::Borrowed)
+    }
+
+    fn end_marker(&self) -> Option<Cow<'a, str>> {
+        self.end_marker.map(Cow::Borrowed)
+    }
+}
+
+impl<'a> LineMarkers<'a, [u8]> for CustomMarkers<'a> {
+    fn start_marker(&self) -> Option<Cow<'a, [u8]>> {
+        self.start_marker.map(|s| Cow::Borrowed(s.as_bytes()))
+    }
+
+    fn base_marker(&self) -> Option<Cow<'a, [u8]>> {
+        self.base_marker.map(|s| Cow::Borrowed(s.as_bytes()))
+    }
+
+    fn mid_marker(&self) -> Option<Cow<'a, [u8]>> {
+        self.mid_marker.map(|s| Cow::Borrowed(s.as_bytes()))
+    }
+
+    fn end_marker(&self) -> Option<Cow<'a, [u8]>> {
+        self.end_marker.map(|s| Cow::Borrowed(s.as_bytes()))
+    }
 }
 
 pub trait AnnotationMarkers<'a, T> {
@@ -664,6 +843,7 @@ pub trait AnnotationMarkers<'a, T> {
 #[cfg(test)]
 mod merge3_tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     const TZU: &str = r###"     The Nameless is the origin of Heaven and Earth;
      The named is the mother of all things.
@@ -872,7 +1052,10 @@ mod merge3_tests {
             vec![MergeRegion::A { start: 0, end: 2 }]
         );
 
-        // TODO: assert_eq!(m3.merge_lines(false), vec!["aaa", "bbb"]);
+        assert_eq!(
+            m3.merge_lines(false, &FixedMarkers::default()),
+            vec!["aaa", "bbb"]
+        );
     }
 
     /// No conflicts because only one side changed.
@@ -905,9 +1088,10 @@ mod merge3_tests {
             &["aaa\n", "bbb\n"],
         );
 
-        /* TODO
-        assert_eq!(m3.merge_lines().join(""), "aaa\nbbb\n222\n");
-        */
+        assert_eq!(
+            m3.merge_lines(false, &FixedMarkers::default()).join(""),
+            "aaa\nbbb\n222\n"
+        );
     }
 
     #[test]
@@ -918,9 +1102,10 @@ mod merge3_tests {
             &["aaa\n", "bbb\n", "222\n"],
         );
 
-        /* TODO
-        assert_eq!(m3.merge_lines().join(""), "aaa\nbbb\n222\n");
-        */
+        assert_eq!(
+            m3.merge_lines(false, &FixedMarkers::default()).join(""),
+            "aaa\nbbb\n222\n"
+        );
     }
 
     #[test]
@@ -931,8 +1116,10 @@ mod merge3_tests {
             &["aaa\n", "bbb\n", "222\n"],
         );
 
-        /* TODO
-        assert_eq!(m3.merge_lines().join(""), "aaa\nbbb\n222\n"); */
+        assert_eq!(
+            m3.merge_lines(false, &FixedMarkers::default()).join(""),
+            "aaa\nbbb\n222\n"
+        );
     }
 
     #[test]
@@ -943,26 +1130,26 @@ mod merge3_tests {
             &["aaa\n", "bbb\n", "333\n"],
         );
 
-        /* TODO
-                let ml = m3.merge_lines(
-                    name_a = "a",
-                    name_b = "b",
-                    start_marker = "<<",
-                    mid_marker = "--",
-                    end_marker = ">>",
-                );
-                assert_eq!(
-                    ml.join(""),
-                    r###"aaa
-        bbb
-        << a
-        222
-        --
-        333
-        >> b
-        "###
-                );
-                */
+        let ml = m3.merge_lines(
+            false,
+            &CustomMarkers {
+                start_marker: Some("<< a\n"),
+                mid_marker: Some("--\n"),
+                end_marker: Some(">> b\n"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            ml.join(""),
+            r###"aaa
+bbb
+<< a
+222
+--
+333
+>> b
+"###
+        );
     }
 
     #[test]
@@ -973,14 +1160,16 @@ mod merge3_tests {
             &["aaa\n", "222\n", "bbb\n"],
         );
 
-        /* TODO
-        let ml = m3.merge_lines(name_a="a",
-                            name_b="b",
-                            start_marker="<<",
-                            mid_marker="--",
-                            end_marker=">>");
+        let ml = m3.merge_lines(
+            false,
+            &CustomMarkers {
+                start_marker: Some("<< a\n"),
+                mid_marker: Some("--\n"),
+                end_marker: Some(">> b\n"),
+                ..Default::default()
+            },
+        );
         assert_eq!(ml.join(""), "aaa\n222\nbbb\n");
-        */
     }
 
     /// Both try to insert lines in the same place.
@@ -1024,21 +1213,26 @@ mod merge3_tests {
             ]
         );
 
-        /*TODO
-                let ml = m3.merge_lines(name_a="a",
-                                    name_b="b",
-                                    start_marker="<<",
-                                    mid_marker="--",
-                                    end_marker=">>");
-                assert_eq!(ml.join(""), r###"aaa
-        << a
-        111
-        --
-        222
-        >> b
-        bbb
-        "###);
-                */
+        let ml = m3.merge_lines(
+            false,
+            &CustomMarkers {
+                start_marker: Some("<< a\n"),
+                mid_marker: Some("--\n"),
+                end_marker: Some(">> b\n"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            ml.join(""),
+            r###"aaa
+<< a
+111
+--
+222
+>> b
+bbb
+"###
+        );
     }
 
     /// Both try to insert lines in the same place.
@@ -1083,11 +1277,8 @@ mod merge3_tests {
         let b = splitlines(TAO);
         let m3 = Merge3::new(base.as_slice(), a.as_slice(), b.as_slice());
 
-        /* TODO
-
-        let ml = m3.merge_lines("LAO", "TAO");
-        assert_eq!(ml, MERGED_RESULT);
-        */
+        let ml = m3.merge_lines(false, &FixedMarkers::new(Some("LAO"), Some("TAO"), None));
+        assert_eq!(ml.join(""), MERGED_RESULT);
     }
 
     /// Test case from diff3 manual.
@@ -1107,13 +1298,19 @@ mod merge3_tests {
             .collect::<Vec<&[u8]>>();
         let m3 = Merge3::new(base.as_slice(), a.as_slice(), b.as_slice());
 
-        /* TODO
-        let ml = m3.merge_lines(b"LAO", b"TAO");
+        let ml = m3.merge_lines(false, &FixedMarkers::new(Some("LAO"), Some("TAO"), None));
 
-        let result = splitlines(MERGED_RESULT).map(|s| s.as_bytes());
+        let result = splitlines(MERGED_RESULT).into_iter().map(|s| s.as_bytes());
 
-        assert_eq!(ml, result.collect::<Vec<&[u8]>>());
-        */
+        let ml_s: Vec<String> = ml
+            .iter()
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .collect();
+        let result_s: Vec<String> = result
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .collect();
+
+        assert_eq!(ml_s, result_s);
     }
 
     /// Reprocessing.
@@ -1131,16 +1328,21 @@ mod merge3_tests {
             this_lines.as_slice(),
         );
 
-        /* TODO
-        let m_lines = m3.merge_lines("OTHER", "THIS", reprocess=True);
+        let m_lines = m3.merge_lines(true, &FixedMarkers::new(Some("OTHER"), Some("THIS"), None));
         let merged_text = m_lines.join("");
-        let optimal_text = (
-            "a\n" * 10 + "<<<<<<< OTHER\nc\n"
-            "=======\n" + ">>>>>>> THIS\n" + 8 * "b\n" +
-            "<<<<<<< OTHER\nc\n" + "=======\n" + 2 * "b\n" +
-            ">>>>>>> THIS\n")
+        let optimal_text = [
+            "a\n".repeat(10),
+            "<<<<<<< OTHER\nc\n".to_string(),
+            "=======\n".to_string(),
+            ">>>>>>> THIS\n".to_string(),
+            "b\n".repeat(8),
+            "<<<<<<< OTHER\nc\n".to_string(),
+            "=======\n".to_string(),
+            "b\n".repeat(2),
+            ">>>>>>> THIS\n".to_string(),
+        ]
+        .concat();
         assert_eq!(optimal_text, merged_text);
-        */
     }
 
     #[test]
@@ -1149,7 +1351,7 @@ mod merge3_tests {
         let this_text = splitlines("ba\n");
         let other_text = splitlines("a\nb\nc\n");
 
-        let mut m3 = Merge3::new(
+        let m3 = Merge3::new(
             base_text.as_slice(),
             other_text.as_slice(),
             this_text.as_slice(),
@@ -1160,87 +1362,129 @@ mod merge3_tests {
         assert_eq!(m3.find_sync_regions(), vec![(2, 2, 3, 3, 1, 1)]);
     }
 
-    /*
-        /* TODO
-        /// Reprocessing.
-        #[test]
-        fn test_minimal_conflicts_common_with_patiencediff() {
-            try:
-                import patiencediff
-            except ImportError:
-                self.skipTest("patiencediff not available")
-            base_text = ("a\n" * 20).splitlines(True)
-            this_text = ("a\n"*10 + "b\n" * 10).splitlines(True)
-            other_text = ("a\n"*10 + "c\n" + "b\n" * 8 + "c\n").splitlines(True)
-            m3 = merge3.Merge3(
-                base_text, other_text, this_text,
-                sequence_matcher=patiencediff.PatienceSequenceMatcher)
-            m_lines = m3.merge_lines(
-                    "OTHER", "THIS", reprocess=True)
-            merged_text = "".join(list(m_lines))
-            optimal_text = (
-                "a\n" * 10 + "<<<<<<< OTHER\nc\n"
-                + 8 * "b\n" + "c\n=======\n"
-                + 10 * "b\n" + ">>>>>>> THIS\n")
-            assert_eq!(optimal_text, merged_text)
-        }
-        */
+    /// Reprocessing.
+    #[cfg(feature = "patiencediff")]
+    #[test]
+    fn test_minimal_conflicts_common_with_patiencediff() {
+        let base_text = "a\n".repeat(20);
+        let base_lines = splitlines(&base_text);
+        let this_text = ["a\n".repeat(10), "b\n".repeat(10)].concat();
+        let this_lines = splitlines(&this_text);
+        let other_text = [
+            "a\n".repeat(10),
+            "c\n".to_string(),
+            "b\n".repeat(8),
+            "c\n".to_string(),
+        ]
+        .concat();
+        let other_lines = splitlines(&other_text);
+        let m3 = Merge3::with_patience_diff(&base_lines, &other_lines, &this_lines);
+        let m_lines = m3.merge_lines(true, &FixedMarkers::new(Some("OTHER"), Some("THIS"), None));
+        let merged_text = m_lines.join("");
+        let optimal_text = [
+            "a\n".repeat(10),
+            "<<<<<<< OTHER\nc\n".to_string(),
+            "b\n".repeat(8),
+            "c\n=======\n".to_string(),
+            "b\n".repeat(10),
+            ">>>>>>> THIS\n".to_string(),
+        ]
+        .concat();
+        assert_eq!(optimal_text, merged_text)
+    }
 
-        #[test]
-        fn test_minimal_conflicts_unique() {
-            def add_newline(s):
-                """Add a newline to each entry in the string."""
-                return [(x+"\n") for x in s]
-
-            let base_text = add_newline("abcdefghijklm");
-            let this_text = add_newline("abcdefghijklmNOPQRSTUVWXYZ");
-            let other_text = add_newline("abcdefghijklm1OPQRSTUVWXY2");
-            let m3 = Merge3::new(base_text, other_text, this_text);
-            let m_lines = m3.merge_lines("OTHER", "THIS", reprocess=True);
-            let merged_text = m_lines.join("");
-            optimal_text = "".join(
-                add_newline("abcdefghijklm")
-                + ["<<<<<<< OTHER\n1\n=======\nN\n>>>>>>> THIS\n"]
-                + add_newline("OPQRSTUVWXY")
-                + ["<<<<<<< OTHER\n2\n=======\nZ\n>>>>>>> THIS\n"]
-                )
-            assert_eq!(optimal_text, merged_text);
+    #[test]
+    fn test_minimal_conflicts_unique() {
+        /// Add a newline to each entry in the string.
+        fn add_newline(s: &str) -> String {
+            let mut r = String::new();
+            for c in s.chars() {
+                r.push(c);
+                r.push('\n');
+            }
+            r
         }
 
-        #[test]
-        fn test_minimal_conflicts_nonunique() {
-            def add_newline(s):
-                """Add a newline to each entry in the string."""
-                return [(x+"\n") for x in s]
+        let base_text = add_newline("abcdefghijklm");
+        let base_lines = splitlines(&base_text);
+        let this_text = add_newline("abcdefghijklmNOPQRSTUVWXYZ");
+        let this_lines = splitlines(&this_text);
+        let other_text = add_newline("abcdefghijklm1OPQRSTUVWXY2");
+        let other_lines = splitlines(&other_text);
+        let m3 = Merge3::new(&base_lines, &other_lines, &this_lines);
+        let m_lines = m3.merge_lines(true, &FixedMarkers::new(Some("OTHER"), Some("THIS"), None));
+        let merged_text = m_lines.join("");
+        let optimal_text = [
+            add_newline("abcdefghijklm"),
+            "<<<<<<< OTHER\n1\n=======\nN\n>>>>>>> THIS\n".to_string(),
+            add_newline("OPQRSTUVWXY"),
+            "<<<<<<< OTHER\n2\n=======\nZ\n>>>>>>> THIS\n".to_string(),
+        ]
+        .concat();
+        assert_eq!(optimal_text, merged_text);
+    }
 
-            let base_text = add_newline("abacddefgghij");
-            let this_text = add_newline("abacddefgghijkalmontfprz");
-            let other_text = add_newline("abacddefgghijknlmontfprd");
-            let m3 = Merge3::new(base_text, other_text, this_text);
-            let m_lines = m3.merge_lines("OTHER", "THIS", reprocess=True);
-            let merged_text = m_lines.join("");
-            optimal_text = "".join(
-                add_newline("abacddefgghijk")
-                + ["<<<<<<< OTHER\nn\n=======\na\n>>>>>>> THIS\n"]
-                + add_newline("lmontfpr")
-                + ["<<<<<<< OTHER\nd\n=======\nz\n>>>>>>> THIS\n"]
-                )
-            assert_eq!(optimal_text, merged_text);
+    #[test]
+    fn test_minimal_conflicts_nonunique() {
+        fn add_newline(s: &str) -> String {
+            let mut r = String::new();
+            for c in s.chars() {
+                r.push(c);
+                r.push('\n');
+            }
+            r
         }
 
-        /// Reprocessing and showing base breaks correctly.
-        #[test]
-        fn test_reprocess_and_base() {
-            let base_text = ("a\n" * 20).splitlines(True)
-            let this_text = ("a\n"*10+"b\n" * 10).splitlines(True)
-            let other_text = ("a\n"*10+"c\n"+"b\n" * 8 + "c\n").splitlines(True)
-            let m3 = Merge3::new(base_text, other_text, this_text)
-            m_lines = m3.merge_lines("OTHER", "THIS", reprocess=True,
-                                     base_marker="|||||||")
-            self.assertRaises(merge3.CantReprocessAndShowBase, list, m_lines)
-        }
+        let base_text = add_newline("abacddefgghij");
+        let base_lines = splitlines(&base_text);
+        let this_text = add_newline("abacddefgghijkalmontfprz");
+        let this_lines = splitlines(&this_text);
+        let other_text = add_newline("abacddefgghijknlmontfprd");
+        let other_lines = splitlines(&other_text);
+        let m3 = Merge3::new(&base_lines, &other_lines, &this_lines);
+        let m_lines = m3.merge_lines(true, &FixedMarkers::new(Some("OTHER"), Some("THIS"), None));
+        let merged_text = m_lines.join("");
+        let optimal_text = [
+            add_newline("abacddefgghijk"),
+            "<<<<<<< OTHER\nn\n=======\na\n>>>>>>> THIS\n".to_string(),
+            add_newline("lmontfpr"),
+            "<<<<<<< OTHER\nd\n=======\nz\n>>>>>>> THIS\n".to_string(),
+        ]
+        .concat();
+        assert_eq!(optimal_text, merged_text);
+    }
 
-    */
+    /// Reprocessing and showing base breaks correctly.
+    #[test]
+    #[should_panic(expected = "base marker in reprocessed merge")]
+    fn test_reprocess_and_base() {
+        let base_text = "a\n".repeat(20);
+        let base_lines = base_text.split_inclusive('\n').collect::<Vec<&str>>();
+        let this_text = ["a\n".repeat(10), "b\n".repeat(10)].concat();
+        let this_lines = this_text.split_inclusive('\n').collect::<Vec<&str>>();
+        let other_text = [
+            "a\n".repeat(10),
+            "c\n".to_string(),
+            "b\n".repeat(8),
+            "c\n".to_string(),
+        ]
+        .concat();
+        let other_lines = other_text.split_inclusive('\n').collect::<Vec<&str>>();
+        let m3 = Merge3::new(
+            base_lines.as_slice(),
+            other_lines.as_slice(),
+            this_lines.as_slice(),
+        );
+        m3.merge_lines(
+            true,
+            &CustomMarkers {
+                start_marker: Some("<<<<< OTHER\n"),
+                mid_marker: Some("=======\n"),
+                end_marker: Some(">>>>>> THIS\n"),
+                base_marker: Some("|||||||\n"),
+            },
+        );
+    }
 
     #[test]
     fn test_dos_text() {
@@ -1253,12 +1497,11 @@ mod merge3_tests {
             this_text.as_slice(),
         );
 
-        /* TODO
-        let m_lines = m3.merge_lines("OTHER", "THIS");
+        let m_lines = m3.merge_lines(false, &FixedMarkers::new(Some("OTHER"), Some("THIS"), None));
         assert_eq!(
-            "<<<<<<< OTHER\r\nc\r\n=======\r\nb\r\n"
-            ">>>>>>> THIS\r\n".splitlines(True), list(m_lines));
-        */
+            "<<<<<<< OTHER\r\nc\r\n=======\r\nb\r\n>>>>>>> THIS\r\n",
+            m_lines.join("")
+        );
     }
 
     #[test]
@@ -1272,12 +1515,11 @@ mod merge3_tests {
             this_text.as_slice(),
         );
 
-        /* TODO
-        let m_lines = m3.merge_lines("OTHER", "THIS");
+        let m_lines = m3.merge_lines(false, &FixedMarkers::new(Some("OTHER"), Some("THIS"), None));
         assert_eq!(
-            "<<<<<<< OTHER\rc\r=======\rb\r"
-            ">>>>>>> THIS\r".splitlines(True), list(m_lines));
-        */
+            "<<<<<<< OTHER\rc\r=======\rb\r>>>>>>> THIS\r",
+            m_lines.join("")
+        );
     }
 
     #[test]
@@ -1292,11 +1534,8 @@ mod merge3_tests {
             other_text.as_slice(),
         );
         m3.set_cherrypick(true);
-        /* TODO
-        let m_lines = m3.merge_lines();
-        assert_eq!("a\n<<<<<<<\n=======\nc\n>>>>>>>\n",
-                         "".join(m_lines));
-        */
+        let m_lines = m3.merge_lines(false, &FixedMarkers::default());
+        assert_eq!("a\n<<<<<<<\n=======\nc\n>>>>>>>\n", m_lines.join(""));
 
         // This is not symmetric
         let mut m3 = Merge3::new(
@@ -1306,10 +1545,8 @@ mod merge3_tests {
         );
         m3.set_cherrypick(true);
 
-        /* TODO
-        let m_lines = m3.merge_lines();
-        assert_eq!("a\n<<<<<<<\nb\nc\n=======\n>>>>>>>\n", "".join(m_lines));
-        */
+        let m_lines = m3.merge_lines(false, &FixedMarkers::default());
+        assert_eq!("a\n<<<<<<<\nb\nc\n=======\n>>>>>>>\n", m_lines.join(""));
     }
 
     #[test]
@@ -1324,47 +1561,68 @@ mod merge3_tests {
             other_text.as_slice(),
         );
         m3.set_cherrypick(true);
-        /* TODO
-        m_lines = m3.merge_lines()
-        assert_eq!("a\n"
-                         "b\n"
-                         "<<<<<<<\n"
-                         "q\n"
-                         "=======\n"
-                         "f\n"
-                         ">>>>>>>\n"
-                         "<<<<<<<\n"
-                         "=======\n"
-                         "g\n"
-                         ">>>>>>>\n",
-                         "".join(m_lines))
-        */
+        let m_lines = m3.merge_lines(false, &FixedMarkers::default());
+        assert_eq!(
+            [
+                "a\n",
+                "b\n",
+                "<<<<<<<\n",
+                "q\n",
+                "=======\n",
+                "f\n",
+                ">>>>>>>\n",
+                "<<<<<<<\n",
+                "=======\n",
+                "g\n",
+                ">>>>>>>\n"
+            ]
+            .concat(),
+            m_lines.join("")
+        );
     }
 
-    /* TODO
     /// Objects other than strs may be used with Merge3.
     ///
     /// merge_groups and merge_regions work with non-str input.  Methods that
     /// return lines like merge_lines fail.
     #[test]
     fn test_allow_objects() {
-        base = [(int2byte(x), int2byte(x)) for x in bytearray(b"abcde")]
-        a = [(int2byte(x), int2byte(x)) for x in bytearray(b"abcdef")]
-        b = [(int2byte(x), int2byte(x)) for x in bytearray(b"Zabcde")]
-        m3 = merge3.Merge3(base, a, b)
+        let base = b"abcde".iter().map(|x| (*x, *x)).collect::<Vec<(u8, u8)>>();
+        let baser = base.iter().collect::<Vec<&(u8, u8)>>();
+        let a = b"abcdef"
+            .iter()
+            .map(|x| (*x, *x))
+            .collect::<Vec<(u8, u8)>>();
+        let ar = a.iter().collect::<Vec<&(u8, u8)>>();
+        let b = b"Zabcde"
+            .iter()
+            .map(|x| (*x, *x))
+            .collect::<Vec<(u8, u8)>>();
+        let br = b.iter().collect::<Vec<&(u8, u8)>>();
+        let m3 = Merge3::new(baser.as_slice(), ar.as_slice(), br.as_slice());
         assert_eq!(
-            [("b", 0, 1),
-             ("unchanged", 0, 5),
-             ("a", 5, 6)],
-            list(m3.merge_regions()))
+            vec![
+                MergeRegion::B { start: 0, end: 1 },
+                MergeRegion::Unchanged { start: 0, end: 5 },
+                MergeRegion::A { start: 5, end: 6 }
+            ],
+            m3.merge_regions()
+        );
         assert_eq!(
-            vec![("b", [(b"Z", b"Z")]),
-             ("unchanged", [
-                 (int2byte(x), int2byte(x)) for x in bytearray(b"abcde")]),
-             ("a", [(b"f", b"f")])],
-            list(m3.merge_groups()))
+            vec![
+                MergeGroup::B(&[&(b"Z"[0], b"Z"[0])]),
+                MergeGroup::Unchanged(&[
+                    &(b"a"[0], b"a"[0]),
+                    &(b"b"[0], b"b"[0]),
+                    &(b"c"[0], b"c"[0]),
+                    &(b"d"[0], b"d"[0]),
+                    &(b"e"[0], b"e"[0])
+                ]),
+                MergeGroup::A(&[&(b"f"[0], b"f"[0])]),
+            ],
+            m3.merge_groups()
+        );
     }
-    */
 }
 
 #[cfg(test)]

@@ -9,3 +9,9 @@ repository = "https://github.com/breezy-team/merge3-rs"
 
 [dependencies]
 difflib = "0.4.0"
+patiencediff = { version = "0.1.1", optional = true }
+pretty_assertions = "1.4.0"
+
+[features]
+patiencediff = ["dep:patiencediff"]
+default = ["patiencediff"]
