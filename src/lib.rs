@@ -48,18 +48,16 @@ fn compare_range<T: PartialEq>(
     if (aend - astart) != (bend - bstart) {
         return false;
     }
-    for (ia, ib) in (astart..aend).zip(bstart..bend) {
-        if a[ia] != b[ib] {
-            return false;
-        }
-    }
-    true
+    (astart..aend)
+        .zip(bstart..bend)
+        .all(|(ia, ib)| a[ia] == b[ib])
 }
 
 /// 3-way merge of texts
 ///
 /// Given BASE, OTHER, THIS, tries to produce a combined text incorporating the changes from both
-/// BASE->OTHER and BASE->THIS.  All three will typically be sequences of lines.
+/// BASE->OTHER and BASE->THIS.  All three will typically be sequences of lines, but don't have to
+/// be.
 
 pub struct Merge3<'b, T: Eq + std::hash::Hash + ?Sized> {
     // Lines in BASE
@@ -111,27 +109,13 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     }
 
     /// Return sequences of matching and conflicting regions.
-
-    /// This returns tuples, where the first value says what kind we
-    /// have:
-
-    /// MergeRegion::Unchanged { start, end }
-    ///      Take a region of base[start..end]
-
-    /// MergeRegion::Same { astart, aend }
-    ///      b and a are different from base but give the same result
-
-    /// MergeRegion::A { start, end }
-    ///      Non-clashing insertion from a[start..end]
-
-    /// Method is as follows:
-
+    ///
     /// The two sequences align only on regions which match the base
     /// and both descendents.  These are found by doing a two-way diff
     /// of each one against the base, and then finding the
     /// intersections between those regions.  These "sync regions"
     /// are by definition unchanged in both and easily dealt with.
-
+    ///
     /// The regions in between can be in any of three cases:
     /// conflicted, or changed on only one side.
     pub fn merge_regions(&self) -> Vec<MergeRegion> {
@@ -399,7 +383,27 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     ///
     /// Lines where both A and B have made the same changes are
     /// eliminated.
-    pub fn reprocess_merge_regions(&self, merge_regions: Vec<MergeRegion>) -> Vec<MergeRegion> {
+    fn reprocess_merge_regions(&self, merge_regions: Vec<MergeRegion>) -> Vec<MergeRegion> {
+        fn mismatch_region(
+            next_a: usize,
+            region_ia: usize,
+            next_b: usize,
+            region_ib: usize,
+        ) -> Option<MergeRegion> {
+            if next_a < region_ia || next_b < region_ib {
+                Some(MergeRegion::Conflict {
+                    zstart: None,
+                    zend: None,
+                    astart: next_a,
+                    aend: region_ia,
+                    bstart: next_b,
+                    bend: region_ib,
+                })
+            } else {
+                None
+            }
+        }
+
         let mut ret = vec![];
         for region in merge_regions {
             if let MergeRegion::Conflict {
@@ -445,22 +449,6 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
         ret
     }
 
-    /// Yield sequence of line groups.  Each one is a tuple:
-    ///
-    /// 'unchanged', lines
-    ///      Lines unchanged from base
-    ///
-    /// 'a', lines
-    ///      Lines taken from a
-    ///
-    /// 'same', lines
-    ///      Lines taken from a (and equal to b)
-    ///
-    /// 'b', lines
-    ///      Lines taken from b
-    ///
-    /// 'conflict', base_lines, a_lines, b_lines
-    ///      Lines from base were changed to either a or b and conflict.
     pub fn merge_groups(&self) -> Vec<MergeGroup<'_, &T>> {
         let mut ret = vec![];
         for m in self.merge_regions() {
@@ -580,22 +568,19 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeRegion {
-    Unchanged {
-        start: usize,
-        end: usize,
-    },
-    Same {
-        astart: usize,
-        aend: usize,
-    },
-    A {
-        start: usize,
-        end: usize,
-    },
-    B {
-        start: usize,
-        end: usize,
-    },
+    /// Take a region of base[start..end]
+    Unchanged { start: usize, end: usize },
+
+    /// b and a are different from base but give the same result
+    Same { astart: usize, aend: usize },
+
+    /// Non-clashing insertion from a[start..end]
+    A { start: usize, end: usize },
+
+    /// Non-clashing insertion from b[start..end]
+    B { start: usize, end: usize },
+
+    /// Conflict region
     Conflict {
         zstart: Option<usize>,
         zend: Option<usize>,
@@ -608,40 +593,20 @@ pub enum MergeRegion {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeGroup<'a, T: Eq> {
-    /// Unchanged region
+    /// Lines unchanged from base
     Unchanged(&'a [T]),
 
-    /// Region where a and b are the same
+    /// Lines taken from a (and equal to b)
     Same(&'a [T]),
 
-    /// Region where a is different from base
+    /// Lines taken from a
     A(&'a [T]),
 
-    /// Region where b is different from base
+    /// Lines taken from b
     B(&'a [T]),
 
-    /// Conflict region
+    /// Lines from base were changed to either a or b and conflict.
     Conflict(Option<&'a [T]>, &'a [T], &'a [T]),
-}
-
-fn mismatch_region(
-    next_a: usize,
-    region_ia: usize,
-    next_b: usize,
-    region_ib: usize,
-) -> Option<MergeRegion> {
-    if next_a < region_ia || next_b < region_ib {
-        Some(MergeRegion::Conflict {
-            zstart: None,
-            zend: None,
-            astart: next_a,
-            aend: region_ia,
-            bstart: next_b,
-            bend: region_ib,
-        })
-    } else {
-        None
-    }
 }
 
 pub trait LineMarkers<'a, T: ToOwned + ?Sized> {
@@ -651,6 +616,7 @@ pub trait LineMarkers<'a, T: ToOwned + ?Sized> {
     fn end_marker(&self) -> Option<Cow<'a, T>>;
 }
 
+/// Implementation of markers found in regular 3-way merge.
 #[derive(Default)]
 pub struct StandardMarkers<'a> {
     other_name: Option<&'a str>,
