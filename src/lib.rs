@@ -389,8 +389,8 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug> Merge3<'b, T> {
         let mut ret = vec![];
         for region in merge_regions {
             if let MergeRegion::Conflict {
-                zstart,
-                zend,
+                zstart: _,
+                zend: _,
                 astart,
                 aend,
                 bstart,
