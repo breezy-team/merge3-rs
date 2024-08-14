@@ -13,20 +13,6 @@ fn intersect(ra: (usize, usize), rb: (usize, usize)) -> Option<(usize, usize)> {
     }
 }
 
-#[cfg(test)]
-mod intersect_tests {
-    use super::intersect;
-
-    #[test]
-    fn test_intersect() {
-        assert_eq!(intersect((0, 10), (0, 6)), Some((0, 6)));
-        assert_eq!(intersect((0, 10), (5, 15)), Some((5, 10)));
-        assert_eq!(intersect((0, 10), (10, 15)), None);
-        assert_eq!(intersect((0, 9), (10, 15)), None);
-        assert_eq!(intersect((0, 9), (7, 15)), Some((7, 9)));
-    }
-}
-
 /// Compare a[astart..aend] == b[bstart..bend], without slicing.
 fn compare_range<T: PartialEq>(
     a: &[T],
@@ -45,21 +31,6 @@ fn compare_range<T: PartialEq>(
         }
     }
     true
-}
-
-#[cfg(test)]
-mod compare_range_tests {
-    use super::compare_range;
-
-    #[test]
-    fn test_compare_range() {
-        let a = [1, 2, 3, 4, 5];
-        let b = [1, 2, 3, 4, 5];
-        assert!(compare_range(&a, 0, 5, &b, 0, 5));
-        assert!(compare_range(&a, 0, 3, &b, 0, 3));
-        assert!(!compare_range(&a, 0, 3, &b, 0, 4));
-        assert!(!compare_range(&a, 0, 3, &b, 1, 4));
-    }
 }
 
 /// 3-way merge of texts
@@ -1394,4 +1365,28 @@ mod merge3_tests {
             list(m3.merge_groups()))
     }
     */
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intersect() {
+        assert_eq!(intersect((0, 10), (0, 6)), Some((0, 6)));
+        assert_eq!(intersect((0, 10), (5, 15)), Some((5, 10)));
+        assert_eq!(intersect((0, 10), (10, 15)), None);
+        assert_eq!(intersect((0, 9), (10, 15)), None);
+        assert_eq!(intersect((0, 9), (7, 15)), Some((7, 9)));
+    }
+
+    #[test]
+    fn test_compare_range() {
+        let a = [1, 2, 3, 4, 5];
+        let b = [1, 2, 3, 4, 5];
+        assert!(compare_range(&a, 0, 5, &b, 0, 5));
+        assert!(compare_range(&a, 0, 3, &b, 0, 3));
+        assert!(!compare_range(&a, 0, 3, &b, 0, 4));
+        assert!(!compare_range(&a, 0, 3, &b, 1, 4));
+    }
 }
