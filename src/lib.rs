@@ -5,6 +5,9 @@
 //! incorporating the changes from both BASE->OTHER and BASE->THIS.
 //! All three will typically be sequences of lines.
 //!
+//! While the primary use case is for text, the implementation is generic and can be used with any
+//! type that implements Eq and Hash.
+//!
 //! ## Example
 //!
 //! ```rust
@@ -58,7 +61,6 @@ fn compare_range<T: PartialEq>(
 /// Given BASE, OTHER, THIS, tries to produce a combined text incorporating the changes from both
 /// BASE->OTHER and BASE->THIS.  All three will typically be sequences of lines, but don't have to
 /// be.
-
 pub struct Merge3<'b, T: Eq + std::hash::Hash + ?Sized> {
     // Lines in BASE
     base: &'b [&'b T],
@@ -609,6 +611,11 @@ pub enum MergeGroup<'a, T: Eq> {
     Conflict(Option<&'a [T]>, &'a [T], &'a [T]),
 }
 
+/// Markers for a merge.
+///
+/// These are used to provide context for a merge conflict.
+/// The markers are inserted into the merged text to show where the conflicts are.
+/// The markers are typically used to show the start and end of a conflict region.
 pub trait LineMarkers<'a, T: ToOwned + ?Sized> {
     fn start_marker(&self) -> Option<Cow<'a, T>>;
     fn base_marker(&self) -> Option<Cow<'a, T>>;
@@ -684,6 +691,7 @@ impl<'a> LineMarkers<'a, [u8]> for StandardMarkers<'a> {
     }
 }
 
+/// Custom markers for 3-way merge.
 #[derive(Default)]
 pub struct CustomMarkers<'a> {
     pub start_marker: Option<&'a str>,
