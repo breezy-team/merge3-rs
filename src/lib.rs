@@ -1,3 +1,4 @@
+#![deny(missing_docs)]
 //! # Merge3
 //! A rust implementation of 3-way merge of texts.
 //!
@@ -75,6 +76,7 @@ pub struct Merge3<'b, T: Eq + std::hash::Hash + ?Sized> {
 }
 
 impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
+    /// Create a new instance of Merge3.
     pub fn new(base: &'b [&'b T], a: &'b [&'b T], b: &'b [&'b T]) -> Merge3<'b, T> {
         Merge3 {
             base,
@@ -86,6 +88,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     }
 
     #[cfg(feature = "patiencediff")]
+    /// Create a new instance of Merge3 with patience diff.
     pub fn with_patience_diff(base: &'b [&'b T], a: &'b [&'b T], b: &'b [&'b T]) -> Merge3<'b, T> {
         Merge3 {
             base,
@@ -106,6 +109,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
         }
     }
 
+    /// Indicate if this merge is a cherrypick.
     pub fn set_cherrypick(&mut self, is_cherrypick: bool) {
         self.is_cherrypick = is_cherrypick;
     }
@@ -451,6 +455,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
         ret
     }
 
+    /// Return merge groups
     pub fn merge_groups(&self) -> Vec<MergeGroup<'_, &T>> {
         let mut ret = vec![];
         for m in self.merge_regions() {
@@ -568,31 +573,68 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     }
 }
 
+/// A region of a merge.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeRegion {
     /// Take a region of base[start..end]
-    Unchanged { start: usize, end: usize },
+    Unchanged {
+        /// Start of the region in base
+        start: usize,
+
+        /// End of the region in base
+        end: usize,
+    },
 
     /// b and a are different from base but give the same result
-    Same { astart: usize, aend: usize },
+    Same {
+        /// Start of the insertion in a
+        astart: usize,
+
+        /// End of the insertion in a
+        aend: usize,
+    },
 
     /// Non-clashing insertion from a[start..end]
-    A { start: usize, end: usize },
+    A {
+        /// Start of the insertion in a
+        start: usize,
+
+        /// End of the insertion in a
+        end: usize,
+    },
 
     /// Non-clashing insertion from b[start..end]
-    B { start: usize, end: usize },
+    B {
+        /// Start of the insertion in b
+        start: usize,
+
+        /// End of the insertion in b
+        end: usize,
+    },
 
     /// Conflict region
     Conflict {
+        /// Start of the conflict in base
         zstart: Option<usize>,
+
+        /// End of the conflict in base
         zend: Option<usize>,
+
+        /// Start of the conflict in a
         astart: usize,
+
+        /// End of the conflict in a
         aend: usize,
+
+        /// Start of the conflict in b
         bstart: usize,
+
+        /// End of the conflict in b
         bend: usize,
     },
 }
 
+/// A group of lines from the merge.
 #[derive(Debug, PartialEq, Eq)]
 pub enum MergeGroup<'a, T: Eq> {
     /// Lines unchanged from base
@@ -617,9 +659,16 @@ pub enum MergeGroup<'a, T: Eq> {
 /// The markers are inserted into the merged text to show where the conflicts are.
 /// The markers are typically used to show the start and end of a conflict region.
 pub trait LineMarkers<'a, T: ToOwned + ?Sized> {
+    /// Return the start marker.
     fn start_marker(&self) -> Option<Cow<'a, T>>;
+
+    /// Return the base marker.
     fn base_marker(&self) -> Option<Cow<'a, T>>;
+
+    /// Return the middle marker.
     fn mid_marker(&self) -> Option<Cow<'a, T>>;
+
+    /// Return the end marker.
     fn end_marker(&self) -> Option<Cow<'a, T>>;
 }
 
@@ -631,6 +680,7 @@ pub struct StandardMarkers<'a> {
 }
 
 impl<'a> StandardMarkers<'a> {
+    /// Create a new instance of StandardMarkers.
     pub fn new(other_name: Option<&'a str>, this_name: Option<&'a str>) -> Self {
         StandardMarkers {
             other_name,
@@ -694,13 +744,21 @@ impl<'a> LineMarkers<'a, [u8]> for StandardMarkers<'a> {
 /// Custom markers for 3-way merge.
 #[derive(Default)]
 pub struct CustomMarkers<'a> {
+    /// Start marker for a conflict region.
     pub start_marker: Option<&'a str>,
+
+    /// Base marker for a conflict region.
     pub base_marker: Option<&'a str>,
+
+    /// Middle marker for a conflict region.
     pub mid_marker: Option<&'a str>,
+
+    /// End marker for a conflict region.
     pub end_marker: Option<&'a str>,
 }
 
 impl<'a> CustomMarkers<'a> {
+    /// Create a new instance of CustomMarkers.
     pub fn new(
         start_marker: Option<&'a str>,
         base_marker: Option<&'a str>,
