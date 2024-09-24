@@ -7,6 +7,10 @@ Given BASE, OTHER, THIS, tries to produce a combined text
 incorporating the changes from both BASE->OTHER and BASE->THIS.
 All three will typically be sequences of lines.
 
+The implementation is primarily meant to be used with text files, but
+it should work with any type that can be represented as a sequence of
+lines.
+
 Usage
 =====
 
