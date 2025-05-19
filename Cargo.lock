@@ -292,15 +292,15 @@ dependencies = [
 
 [[package]]
 name = "once_cell"
-version = "1.19.0"
+version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
+checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "patchkit"
-version = "0.1.8"
+version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1628449e4d9f7e8501e9389daf6242adfd8284c2364a3f2a87e16176756b6768"
+checksum = "eeb23e4c6b118129db3c1d9ab32a00bd1dc4b04b5517f346bb9a03e3e29d3937"
 dependencies = [
  "chrono",
  "lazy-regex",
@@ -311,9 +311,9 @@ dependencies = [
 
 [[package]]
 name = "patiencediff"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1f1272fe46de39ded7e5aa8d78494b24f81270d091c0cd1929a0f851992ce77"
+checksum = "2c707262dd66fabcb1b2b79f2d65e2a1f8abb7e31005e882504c99680e009225"
 dependencies = [
  "clap",
  "patchkit",
