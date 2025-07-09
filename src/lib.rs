@@ -495,94 +495,13 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     /// # Arguments
     /// * `reprocess` - If true, remove lines where a and b are the same.
     /// * `markers` - LineMarkers implementation to provide markers for the merge.
-    pub fn merge_lines<'a>(
+    /// * `detect_conflicts` - If true, return conflict detection result along with merged lines.
+    fn _merge_lines<'a>(
         &'b self,
         reprocess: bool,
         markers: &impl LineMarkers<'a, T>,
-    ) -> Vec<std::borrow::Cow<'a, T>>
-    where
-        T: ToOwned,
-        'b: 'a,
-    {
-        let mut merge_regions = self.merge_regions();
-        if reprocess {
-            merge_regions = self.reprocess_merge_regions(merge_regions);
-            assert!(
-                markers.base_marker().is_none(),
-                "base marker in reprocessed merge"
-            );
-        }
-        let mut ret: Vec<std::borrow::Cow<T>> = vec![];
-        for m in merge_regions {
-            match m {
-                MergeRegion::Unchanged { start, end } => {
-                    for i in start..end {
-                        ret.push(std::borrow::Cow::Borrowed(self.base[i]));
-                    }
-                }
-                MergeRegion::Same { astart, aend } => {
-                    for i in astart..aend {
-                        ret.push(std::borrow::Cow::Borrowed(self.a[i]));
-                    }
-                }
-                MergeRegion::A { start, end } => {
-                    for i in start..end {
-                        ret.push(std::borrow::Cow::Borrowed(self.a[i]));
-                    }
-                }
-                MergeRegion::B { start, end } => {
-                    for i in start..end {
-                        ret.push(std::borrow::Cow::Borrowed(self.b[i]));
-                    }
-                }
-                MergeRegion::Conflict {
-                    zstart,
-                    zend,
-                    astart,
-                    aend,
-                    bstart,
-                    bend,
-                } => {
-                    if let Some(start_marker) = markers.start_marker() {
-                        ret.push(start_marker);
-                    }
-                    for i in astart..aend {
-                        ret.push(std::borrow::Cow::Borrowed(self.a[i]));
-                    }
-                    if let Some(base_marker) = markers.base_marker() {
-                        if let Some(zstart) = zstart {
-                            ret.push(base_marker);
-                            for i in zstart..zend.unwrap() {
-                                ret.push(std::borrow::Cow::Borrowed(self.base[i]));
-                            }
-                        }
-                    }
-                    if let Some(mid_marker) = markers.mid_marker() {
-                        ret.push(mid_marker);
-                    }
-                    for i in bstart..bend {
-                        ret.push(std::borrow::Cow::Borrowed(self.b[i]));
-                    }
-                    if let Some(end_marker) = markers.end_marker() {
-                        ret.push(end_marker);
-                    }
-                }
-            }
-        }
-        ret
-    }
-
-    /// Return merge in CVS-style format with conflict detection.
-    /// Returns (merged_lines, has_conflicts)
-    ///
-    /// # Arguments
-    /// * `reprocess` - If true, remove lines where a and b are the same.
-    /// * `markers` - LineMarkers implementation to provide markers for the merge.
-    pub fn merge_lines_with_conflict<'a>(
-        &'b self,
-        reprocess: bool,
-        markers: &impl LineMarkers<'a, T>,
-    ) -> (Vec<std::borrow::Cow<'a, T>>, bool)
+        detect_conflicts: bool,
+    ) -> (Vec<std::borrow::Cow<'a, T>>, Option<bool>)
     where
         T: ToOwned,
         'b: 'a,
@@ -629,7 +548,9 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
                     bstart,
                     bend,
                 } => {
-                    has_conflicts = true; // Conflict detected!
+                    if detect_conflicts {
+                        has_conflicts = true;
+                    }
 
                     if let Some(start_marker) = markers.start_marker() {
                         ret.push(start_marker);
@@ -658,7 +579,52 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
             }
         }
 
-        (ret, has_conflicts)
+        let conflict_result = if detect_conflicts { Some(has_conflicts) } else { None };
+        (ret, conflict_result)
+    }
+
+    /// Returns merge in CVS-style format.
+    ///
+    /// This is a wrapper function for backward compatibility, which does not detect conflicts.
+    ///
+    /// # Arguments
+    /// * `reprocess` - If true, remove lines where a and b are the same.
+    /// * `markers` - LineMarkers implementation to provide markers for the merge.
+    pub fn merge_lines<'a>(
+        &'b self,
+        reprocess: bool,
+        markers: &impl LineMarkers<'a, T>,
+    ) -> Vec<Cow<'a, T>>
+    where
+        T: ToOwned,
+        'b: 'a,
+    {
+        self._merge_lines(reprocess, markers, false).0
+    }
+
+    /// Returns merge in CVS-style format along with a conflict detection result.
+    ///
+    /// This is a wrapper function that specifically enables conflict detection.
+    ///
+    /// # Arguments
+    /// * `reprocess` - If true, remove lines where a and b are the same.
+    /// * `markers` - LineMarkers implementation to provide markers for the merge.
+    ///
+    /// # Returns
+    /// A tuple containing:
+    /// * `Vec<std::borrow::Cow<'a, T>>` - The merged lines.
+    /// * `bool` - True if conflicts were detected, false otherwise.
+    pub fn merge_lines_with_conflict<'a>(
+        &'b self,
+        reprocess: bool,
+        markers: &impl LineMarkers<'a, T>,
+    ) -> (Vec<Cow<'a, T>>, bool)
+    where
+        T: ToOwned,
+        'b: 'a,
+    {
+        let (lines, conflicts) = self._merge_lines(reprocess, markers, true);
+        (lines, conflicts.unwrap_or(false))
     }
 }
 
