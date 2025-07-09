@@ -501,7 +501,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
         reprocess: bool,
         markers: &impl LineMarkers<'a, T>,
         detect_conflicts: bool,
-    ) -> (Vec<std::borrow::Cow<'a, T>>, Option<bool>)
+    ) -> (Vec<Cow<'a, T>>, Option<bool>)
     where
         T: ToOwned,
         'b: 'a,
@@ -579,7 +579,11 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
             }
         }
 
-        let conflict_result = if detect_conflicts { Some(has_conflicts) } else { None };
+        let conflict_result = if detect_conflicts {
+            Some(has_conflicts)
+        } else {
+            None
+        };
         (ret, conflict_result)
     }
 
