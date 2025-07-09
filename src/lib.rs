@@ -609,11 +609,6 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     /// # Arguments
     /// * `reprocess` - If true, remove lines where a and b are the same.
     /// * `markers` - LineMarkers implementation to provide markers for the merge.
-    ///
-    /// # Returns
-    /// A tuple containing:
-    /// * `Vec<std::borrow::Cow<'a, T>>` - The merged lines.
-    /// * `bool` - True if conflicts were detected, false otherwise.
     pub fn merge_lines_with_conflict<'a>(
         &'b self,
         reprocess: bool,
