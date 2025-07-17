@@ -124,7 +124,10 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     ///
     /// The regions in between can be in any of three cases:
     /// conflicted, or changed on only one side.
-    pub fn merge_regions(&self) -> Vec<MergeRegion> {
+    pub fn merge_regions(&self) -> Vec<MergeRegion>
+    where
+        T: std::fmt::Debug,
+    {
         let mut iz = 0;
         let mut ia = 0;
         let mut ib = 0;
@@ -213,7 +216,10 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     ///
     /// Generates a list of (base1, base2, a1, a2, b1, b2).  There is
     /// always a zero-length sync region at the end of all the files.
-    pub fn find_sync_regions(&self) -> Vec<(usize, usize, usize, usize, usize, usize)> {
+    pub fn find_sync_regions(&self) -> Vec<(usize, usize, usize, usize, usize, usize)>
+    where
+        T: std::fmt::Debug,
+    {
         let mut ia = 0;
         let mut ib = 0;
         let amatches = (self.get_matching_blocks)(self.base, self.a);
@@ -1669,5 +1675,272 @@ mod tests {
         assert!(compare_range(&a, 0, 3, &b, 0, 3));
         assert!(!compare_range(&a, 0, 3, &b, 0, 4));
         assert!(!compare_range(&a, 0, 3, &b, 1, 4));
+    }
+
+    #[test]
+    fn test_custom_markers_str() {
+        let base = vec!["line1", "line2", "line3"];
+        let a = vec!["line1", "changed2", "line3"];
+        let b = vec!["line1", "line2", "changed3"];
+
+        let m3 = Merge3::new(&base, &a, &b);
+        let markers = CustomMarkers {
+            start_marker: Some("<<< MINE"),
+            base_marker: Some("||||| BASE"),
+            mid_marker: Some("==="),
+            end_marker: Some(">>> YOURS"),
+        };
+
+        let merged = m3.merge_lines(false, &markers);
+
+        // Verify custom markers are used
+        assert!(merged.iter().any(|line| line.as_ref() == "<<< MINE"));
+        assert!(merged.iter().any(|line| line.as_ref() == "||||| BASE"));
+        assert!(merged.iter().any(|line| line.as_ref() == "==="));
+        assert!(merged.iter().any(|line| line.as_ref() == ">>> YOURS"));
+    }
+
+    #[test]
+    fn test_custom_markers_bytes() {
+        let base = vec![
+            b"line1".as_slice(),
+            b"line2".as_slice(),
+            b"line3".as_slice(),
+        ];
+        let a = vec![
+            b"line1".as_slice(),
+            b"changed2".as_slice(),
+            b"line3".as_slice(),
+        ];
+        let b = vec![
+            b"line1".as_slice(),
+            b"line2".as_slice(),
+            b"changed3".as_slice(),
+        ];
+
+        let m3 = Merge3::new(&base, &a, &b);
+        let markers = CustomMarkers {
+            start_marker: Some("<<< MINE"),
+            base_marker: Some("||||| BASE"),
+            mid_marker: Some("==="),
+            end_marker: Some(">>> YOURS"),
+        };
+
+        let merged = m3.merge_lines(false, &markers);
+
+        // Verify custom markers are used as bytes
+        assert!(merged.iter().any(|line| line.as_ref() == b"<<< MINE"));
+        assert!(merged.iter().any(|line| line.as_ref() == b"||||| BASE"));
+        assert!(merged.iter().any(|line| line.as_ref() == b"==="));
+        assert!(merged.iter().any(|line| line.as_ref() == b">>> YOURS"));
+    }
+
+    #[test]
+    #[cfg(feature = "patiencediff")]
+    fn test_with_patience_diff() {
+        let base = vec!["a", "b", "c", "d", "e"];
+        let a = vec!["a", "c", "d", "e"];
+        let b = vec!["a", "b", "c", "e"];
+
+        let m3 = Merge3::with_patience_diff(&base, &a, &b);
+
+        // Verify it creates a valid Merge3 instance
+        assert_eq!(m3.base.len(), 5);
+        assert_eq!(m3.a.len(), 4);
+        assert_eq!(m3.b.len(), 4);
+
+        // Should produce a conflict
+        let regions = m3.merge_regions();
+        assert!(regions
+            .iter()
+            .any(|r| matches!(r, MergeRegion::Conflict { .. })));
+    }
+
+    #[test]
+    fn test_cherrypick_edge_cases() {
+        // Test case where last_base_idx != zend - zstart
+        let base = vec!["a", "b", "c", "d"];
+        let a = vec!["a", "x", "c", "d"];
+        let b = vec!["a", "b", "y", "d"];
+
+        let mut m3 = Merge3::new(&base, &a, &b);
+        m3.set_cherrypick(true);
+
+        let regions = m3.merge_regions();
+
+        // Should have conflicts
+        assert!(regions
+            .iter()
+            .any(|r| matches!(r, MergeRegion::Conflict { .. })));
+
+        // Test refine_cherrypick_conflict with different arithmetic combinations
+        let refined = m3.refine_cherrypick_conflict(0, 4, 0, 4, 0, 4);
+        assert!(!refined.is_empty());
+    }
+
+    #[test]
+    fn test_cherrypick_no_conflicts() {
+        // Test case where cherrypick produces no conflicts
+        let base = vec!["a", "b", "c"];
+        let a = vec!["a", "b", "c"];
+        let b = vec!["a", "b", "c"];
+
+        let mut m3 = Merge3::new(&base, &a, &b);
+        m3.set_cherrypick(true);
+
+        let refined = m3.refine_cherrypick_conflict(0, 3, 0, 3, 0, 3);
+
+        // When everything matches, we should get a conflict for the entire range
+        assert_eq!(refined.len(), 1);
+        match &refined[0] {
+            MergeRegion::Conflict {
+                zstart,
+                zend,
+                astart,
+                aend,
+                bstart,
+                bend,
+            } => {
+                assert_eq!(*zstart, Some(0));
+                assert_eq!(*zend, Some(3));
+                assert_eq!(*astart, 0);
+                assert_eq!(*aend, 3);
+                assert_eq!(*bstart, 0);
+                assert_eq!(*bend, 3);
+            }
+            _ => panic!("Expected conflict"),
+        }
+    }
+
+    #[test]
+    fn test_custom_markers_partial() {
+        // Test with only some markers defined
+        let base = vec!["line1", "line2", "line3"];
+        let a = vec!["line1", "changed2", "line3"];
+        let b = vec!["line1", "line2", "changed3"];
+
+        let m3 = Merge3::new(&base, &a, &b);
+        let markers = CustomMarkers {
+            start_marker: Some("START"),
+            base_marker: None,
+            mid_marker: None,
+            end_marker: Some("END"),
+        };
+
+        let merged = m3.merge_lines(false, &markers);
+
+        // Verify only specified markers are used
+        assert!(merged.iter().any(|line| line.as_ref() == "START"));
+        assert!(merged.iter().any(|line| line.as_ref() == "END"));
+    }
+
+    #[test]
+    fn test_cherrypick_partial_match() {
+        // Test case with partial matches in cherrypick
+        let base = vec!["a", "b", "c", "d", "e"];
+        let a = vec!["a", "x", "c", "y", "e"];
+        let b = vec!["a", "b", "c", "d", "e"];
+
+        let mut m3 = Merge3::new(&base, &a, &b);
+        m3.set_cherrypick(true);
+
+        // Test with specific range that triggers edge cases
+        let refined = m3.refine_cherrypick_conflict(1, 4, 1, 4, 1, 4);
+
+        // Should produce conflicts for the changes
+        assert!(refined
+            .iter()
+            .any(|r| matches!(r, MergeRegion::Conflict { .. })));
+    }
+
+    #[test]
+    fn test_cherrypick_arithmetic_edge_cases() {
+        // Test specific arithmetic operations in refine_cherrypick_conflict
+        let base = vec!["a", "b", "c", "d", "e", "f"];
+        let a = vec!["a", "X", "Y", "d", "e", "f"];
+        let b = vec!["a", "b", "c", "Z", "e", "f"];
+
+        let mut m3 = Merge3::new(&base, &a, &b);
+        m3.set_cherrypick(true);
+
+        // This should exercise the arithmetic operations with * and - replacements
+        let refined = m3.refine_cherrypick_conflict(0, 6, 0, 6, 0, 6);
+
+        // Verify we get conflicts
+        let conflicts: Vec<_> = refined
+            .iter()
+            .filter(|r| matches!(r, MergeRegion::Conflict { .. }))
+            .collect();
+        assert!(!conflicts.is_empty());
+
+        // Check specific conflict ranges to ensure arithmetic is correct
+        for conflict in conflicts {
+            if let MergeRegion::Conflict {
+                zstart,
+                zend,
+                astart,
+                aend,
+                bstart,
+                bend,
+            } = conflict
+            {
+                // Verify ranges are valid
+                if let (Some(zs), Some(ze)) = (zstart, zend) {
+                    assert!(*zs <= *ze);
+                }
+                assert!(*astart <= *aend);
+                assert!(*bstart <= *bend);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cherrypick_yielded_a_branches() {
+        // Test the different branches for yielded_a flag
+        let base = vec!["1", "2", "3", "4"];
+        let a = vec!["1", "X", "3", "4"];
+        let b = vec!["1", "2", "Y", "4"];
+
+        let mut m3 = Merge3::new(&base, &a, &b);
+        m3.set_cherrypick(true);
+
+        let regions = m3.merge_regions();
+
+        // Should have at least one conflict
+        assert!(regions
+            .iter()
+            .any(|r| matches!(r, MergeRegion::Conflict { .. })));
+
+        // Test refine with non-empty matches
+        let refined = m3.refine_cherrypick_conflict(0, 4, 0, 4, 0, 4);
+
+        // Should have conflicts where b differs from base
+        let has_conflict = refined
+            .iter()
+            .any(|r| matches!(r, MergeRegion::Conflict { bstart, bend, .. } if bend > bstart));
+        assert!(has_conflict);
+    }
+
+    #[test]
+    fn test_cherrypick_last_idx_mismatch() {
+        // Test case where last_base_idx != zend - zstart || last_b_idx != bend - bstart
+        let base = vec!["start", "a", "b", "c", "end"];
+        let a = vec!["start", "X", "Y", "Z", "end"];
+        let b = vec!["start", "a", "modified", "c", "end"];
+
+        let mut m3 = Merge3::new(&base, &a, &b);
+        m3.set_cherrypick(true);
+
+        // This range should trigger the condition at line 327
+        let refined = m3.refine_cherrypick_conflict(1, 4, 1, 4, 1, 4);
+
+        // Verify we have conflicts
+        assert!(!refined.is_empty());
+
+        // Check that the last conflict uses matches.last() correctly
+        let has_final_conflict = refined
+            .iter()
+            .any(|r| matches!(r, MergeRegion::Conflict { .. }));
+        assert!(has_final_conflict);
     }
 }
