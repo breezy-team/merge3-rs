@@ -98,11 +98,11 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
             get_matching_blocks: |a, b| {
                 patiencediff::SequenceMatcher::new(a, b)
                     .get_matching_blocks()
-                    .iter()
+                    .into_iter()
                     .map(|(first_start, second_start, size)| Match {
-                        first_start: *first_start,
-                        second_start: *second_start,
-                        size: *size,
+                        first_start,
+                        second_start,
+                        size,
                     })
                     .collect()
             },
@@ -325,26 +325,27 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
             last_b_idx = b_idx + match_len;
         }
         if last_base_idx != zend - zstart || last_b_idx != bend - bstart {
-            if yielded_a {
-                ret.push(MergeRegion::Conflict {
-                    zstart: Some(zstart + last_base_idx),
-                    zend: Some(zstart + matches.last().unwrap().first_start),
-                    astart: aend,
-                    aend,
-                    bstart: bstart + last_b_idx,
-                    bend: bstart + matches.last().unwrap().second_start,
-                });
-            } else {
-                // The first conflict gets the a-range
-                yielded_a = true;
-                ret.push(MergeRegion::Conflict {
-                    zstart: Some(zstart + last_base_idx),
-                    zend: Some(zstart + matches.last().unwrap().first_start),
-                    astart,
-                    aend,
-                    bstart: bstart + last_b_idx,
-                    bend: bstart + matches.last().unwrap().second_start,
-                });
+            if let Some(last_match) = matches.last() {
+                if yielded_a {
+                    ret.push(MergeRegion::Conflict {
+                        zstart: Some(zstart + last_base_idx),
+                        zend: Some(zstart + last_match.first_start),
+                        astart: aend,
+                        aend,
+                        bstart: bstart + last_b_idx,
+                        bend: bstart + last_match.second_start,
+                    });
+                } else {
+                    // The first conflict gets the a-range
+                    ret.push(MergeRegion::Conflict {
+                        zstart: Some(zstart + last_base_idx),
+                        zend: Some(zstart + last_match.first_start),
+                        astart,
+                        aend,
+                        bstart: bstart + last_b_idx,
+                        bend: bstart + last_match.second_start,
+                    });
+                }
             }
         }
         if !yielded_a {
@@ -363,29 +364,30 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
 
     /// Return a list of ranges in base that are not conflicted.
     pub fn find_unconflicted(&self) -> Vec<(usize, usize)> {
-        let mut am = (self.get_matching_blocks)(self.base, self.a);
-        let mut bm = (self.get_matching_blocks)(self.base, self.b);
+        let am = (self.get_matching_blocks)(self.base, self.a);
+        let bm = (self.get_matching_blocks)(self.base, self.b);
 
         let mut ret = vec![];
+        let mut am_iter = am.iter();
+        let mut bm_iter = bm.iter();
 
-        while !am.is_empty() && !bm.is_empty() {
-            // there is an unconflicted block at i; how long does it extend?  until whichever one
-            // ends earlier.
-            let a1 = am[0].first_start;
-            let a2 = am[0].first_start + am[0].size;
-            let b1 = bm[0].first_start;
-            let b2 = bm[0].first_start + bm[0].size;
+        let mut am_current = am_iter.next();
+        let mut bm_current = bm_iter.next();
 
-            let i = intersect((a1, a2), (b1, b2));
+        while let (Some(am_match), Some(bm_match)) = (am_current, bm_current) {
+            let a1 = am_match.first_start;
+            let a2 = am_match.first_start + am_match.size;
+            let b1 = bm_match.first_start;
+            let b2 = bm_match.first_start + bm_match.size;
 
-            if let Some(entry) = i {
+            if let Some(entry) = intersect((a1, a2), (b1, b2)) {
                 ret.push(entry);
             }
 
             if a2 < b2 {
-                am.remove(0);
+                am_current = am_iter.next();
             } else {
-                bm.remove(0);
+                bm_current = bm_iter.next();
             }
         }
         ret
@@ -429,12 +431,11 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
             {
                 let a_region = &self.a[astart..aend];
                 let b_region = &self.b[bstart..bend];
-                let mut matches = (self.get_matching_blocks)(a_region, b_region);
+                let matches = (self.get_matching_blocks)(a_region, b_region);
                 let mut next_a = astart;
                 let mut next_b = bstart;
-                // Drop last item from matches
-                matches.pop();
-                for m in matches {
+                let matches_len = matches.len().saturating_sub(1);
+                for m in matches.iter().take(matches_len) {
                     let region_ia = m.first_start + astart;
                     let region_ib = m.second_start + bstart;
 
@@ -486,7 +487,10 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
                     bstart,
                     bend,
                 } => {
-                    let base_lines = zstart.map(|zstart| &self.base[zstart..zend.unwrap()]);
+                    let base_lines = match (zstart, zend) {
+                        (Some(zstart), Some(zend)) => Some(&self.base[zstart..zend]),
+                        _ => None,
+                    };
                     let a_lines = &self.a[astart..aend];
                     let b_lines = &self.b[bstart..bend];
                     ret.push(MergeGroup::Conflict(base_lines, a_lines, b_lines));
@@ -556,9 +560,9 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
                         ret.push(std::borrow::Cow::Borrowed(self.a[i]));
                     }
                     if let Some(base_marker) = markers.base_marker() {
-                        if let Some(zstart) = zstart {
+                        if let (Some(zstart), Some(zend)) = (zstart, zend) {
                             ret.push(base_marker);
-                            for i in zstart..zend.unwrap() {
+                            for i in zstart..zend {
                                 ret.push(std::borrow::Cow::Borrowed(self.base[i]));
                             }
                         }
@@ -697,10 +701,9 @@ impl<'a> StandardMarkers<'a> {
 
 impl<'a> LineMarkers<'a, str> for StandardMarkers<'a> {
     fn start_marker(&self) -> Option<Cow<'a, str>> {
-        if let Some(name) = self.other_name {
-            Some(Cow::Owned(format!("<<<<<<< {}\n", name)))
-        } else {
-            Some(Cow::Borrowed("<<<<<<<\n"))
+        match self.other_name {
+            Some(name) => Some(Cow::Owned(format!("<<<<<<< {}\n", name))),
+            None => Some(Cow::Borrowed("<<<<<<<\n")),
         }
     }
 
@@ -713,25 +716,23 @@ impl<'a> LineMarkers<'a, str> for StandardMarkers<'a> {
     }
 
     fn end_marker(&self) -> Option<Cow<'a, str>> {
-        if let Some(name) = self.this_name {
-            Some(Cow::Owned(format!(">>>>>>> {}\n", name)))
-        } else {
-            Some(Cow::Borrowed(">>>>>>>\n"))
+        match self.this_name {
+            Some(name) => Some(Cow::Owned(format!(">>>>>>> {}\n", name))),
+            None => Some(Cow::Borrowed(">>>>>>>\n")),
         }
     }
 }
 
 impl<'a> LineMarkers<'a, [u8]> for StandardMarkers<'a> {
     fn start_marker(&self) -> Option<Cow<'a, [u8]>> {
-        if let Some(name) = self.other_name {
-            Some(Cow::Owned(format!("<<<<<<< {}\n", name).into_bytes()))
-        } else {
-            Some(Cow::Borrowed("<<<<<<<\n".as_bytes()))
+        match self.other_name {
+            Some(name) => Some(Cow::Owned(format!("<<<<<<< {}\n", name).into_bytes())),
+            None => Some(Cow::Borrowed(b"<<<<<<<\n")),
         }
     }
 
     fn mid_marker(&self) -> Option<Cow<'a, [u8]>> {
-        Some(Cow::Borrowed("=======\n".as_bytes()))
+        Some(Cow::Borrowed(b"=======\n"))
     }
 
     fn base_marker(&self) -> Option<Cow<'a, [u8]>> {
@@ -739,10 +740,9 @@ impl<'a> LineMarkers<'a, [u8]> for StandardMarkers<'a> {
     }
 
     fn end_marker(&self) -> Option<Cow<'a, [u8]>> {
-        if let Some(name) = self.this_name {
-            Some(Cow::Owned(format!(">>>>>>> {}\n", name).into_bytes()))
-        } else {
-            Some(Cow::Borrowed(">>>>>>>\n".as_bytes()))
+        match self.this_name {
+            Some(name) => Some(Cow::Owned(format!(">>>>>>> {}\n", name).into_bytes())),
+            None => Some(Cow::Borrowed(b">>>>>>>\n")),
         }
     }
 }
@@ -886,58 +886,43 @@ mod merge3_tests {
 "###;
 
     fn splitlines(s: &str) -> Vec<&str> {
-        // Initialize an empty vector to store the result
+        if s.is_empty() {
+            return Vec::new();
+        }
+
         let mut result = Vec::new();
-
-        // Initialize variables to track the start and end indices of each line
         let mut start = 0;
-        let mut end = 0;
+        let bytes = s.as_bytes();
+        let mut i = 0;
 
-        // Iterate over the characters in the string
-        while end < s.len() {
-            // Check if the current character is a newline character
-            if s[end..].starts_with('\r') {
-                if s[end + 1..].starts_with('\n') {
-                    // Check if the previous character is a carriage return
-                    // Include the carriage return in the line
-                    result.push(&s[start..end + 2]);
-
-                    // Move the start index to the next character after the newline
-                    start = end + 2;
-
-                    // Move to the character after the newline
-                    end += 2;
-                } else {
-                    // Include the newline in the line
-                    result.push(&s[start..end + 1]);
-
-                    // Move the start index to the next character after the newline
-                    start = end + 1;
-
-                    // Move to the next character
-                    end += 1;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\n' => {
+                    result.push(&s[start..=i]);
+                    start = i + 1;
+                    i += 1;
                 }
-            } else if s[end..].starts_with('\n') {
-                // Include the newline in the line
-                result.push(&s[start..end + 1]);
-
-                // Move the start index to the next character after the newline
-                start = end + 1;
-
-                // Move to the next character
-                end += 1;
-            } else {
-                // Move to the next character
-                end += 1;
+                b'\r' => {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                        result.push(&s[start..i + 2]);
+                        start = i + 2;
+                        i += 2;
+                    } else {
+                        result.push(&s[start..=i]);
+                        start = i + 1;
+                        i += 1;
+                    }
+                }
+                _ => {
+                    i += 1;
+                }
             }
         }
 
-        // Add the last line if it's not empty
         if start < s.len() {
             result.push(&s[start..]);
         }
 
-        // Return the vector of lines
         result
     }
 
