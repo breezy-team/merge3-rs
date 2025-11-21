@@ -505,16 +505,20 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
     /// # Arguments
     /// * `reprocess` - If true, remove lines where a and b are the same.
     /// * `markers` - LineMarkers implementation to provide markers for the merge.
-    pub fn merge_lines<'a>(
+    /// * `detect_conflicts` - If true, return conflict detection result along with merged lines.
+    fn _merge_lines<'a>(
         &'b self,
         reprocess: bool,
         markers: &impl LineMarkers<'a, T>,
-    ) -> Vec<std::borrow::Cow<'a, T>>
+        detect_conflicts: bool,
+    ) -> (Vec<Cow<'a, T>>, Option<bool>)
     where
         T: ToOwned,
         'b: 'a,
     {
         let mut merge_regions = self.merge_regions();
+        let mut has_conflicts = false;
+
         if reprocess {
             merge_regions = self.reprocess_merge_regions(merge_regions);
             assert!(
@@ -522,6 +526,7 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
                 "base marker in reprocessed merge"
             );
         }
+
         let mut ret: Vec<std::borrow::Cow<T>> = vec![];
         for m in merge_regions {
             match m {
@@ -553,6 +558,10 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
                     bstart,
                     bend,
                 } => {
+                    if detect_conflicts {
+                        has_conflicts = true;
+                    }
+
                     if let Some(start_marker) = markers.start_marker() {
                         ret.push(start_marker);
                     }
@@ -579,7 +588,52 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
                 }
             }
         }
-        ret
+
+        let conflict_result = if detect_conflicts {
+            Some(has_conflicts)
+        } else {
+            None
+        };
+        (ret, conflict_result)
+    }
+
+    /// Returns merge in CVS-style format.
+    ///
+    /// This is a wrapper function for backward compatibility, which does not detect conflicts.
+    ///
+    /// # Arguments
+    /// * `reprocess` - If true, remove lines where a and b are the same.
+    /// * `markers` - LineMarkers implementation to provide markers for the merge.
+    pub fn merge_lines<'a>(
+        &'b self,
+        reprocess: bool,
+        markers: &impl LineMarkers<'a, T>,
+    ) -> Vec<Cow<'a, T>>
+    where
+        T: ToOwned,
+        'b: 'a,
+    {
+        self._merge_lines(reprocess, markers, false).0
+    }
+
+    /// Returns merge in CVS-style format along with a conflict detection result.
+    ///
+    /// This is a wrapper function that specifically enables conflict detection.
+    ///
+    /// # Arguments
+    /// * `reprocess` - If true, remove lines where a and b are the same.
+    /// * `markers` - LineMarkers implementation to provide markers for the merge.
+    pub fn merge_lines_with_conflict_flag<'a>(
+        &'b self,
+        reprocess: bool,
+        markers: &impl LineMarkers<'a, T>,
+    ) -> (Vec<Cow<'a, T>>, bool)
+    where
+        T: ToOwned,
+        'b: 'a,
+    {
+        let (lines, conflicts) = self._merge_lines(reprocess, markers, true);
+        (lines, conflicts.unwrap_or(false))
     }
 }
 
@@ -1084,6 +1138,12 @@ mod merge3_tests {
             m3.merge_lines(false, &StandardMarkers::default()).join(""),
             "aaa\nbbb\n222\n"
         );
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) =
+            m3.merge_lines_with_conflict_flag(false, &StandardMarkers::default());
+        assert_eq!(lines.join(""), "aaa\nbbb\n222\n");
+        assert!(!conflicts);
     }
 
     #[test]
@@ -1098,6 +1158,12 @@ mod merge3_tests {
             m3.merge_lines(false, &StandardMarkers::default()).join(""),
             "aaa\nbbb\n222\n"
         );
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) =
+            m3.merge_lines_with_conflict_flag(false, &StandardMarkers::default());
+        assert_eq!(lines.join(""), "aaa\nbbb\n222\n");
+        assert!(!conflicts);
     }
 
     #[test]
@@ -1112,6 +1178,12 @@ mod merge3_tests {
             m3.merge_lines(false, &StandardMarkers::default()).join(""),
             "aaa\nbbb\n222\n"
         );
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) =
+            m3.merge_lines_with_conflict_flag(false, &StandardMarkers::default());
+        assert_eq!(lines.join(""), "aaa\nbbb\n222\n");
+        assert!(!conflicts);
     }
 
     #[test]
@@ -1142,6 +1214,29 @@ bbb
 >> b
 "###
         );
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            false,
+            &CustomMarkers {
+                start_marker: Some("<< a\n"),
+                mid_marker: Some("--\n"),
+                end_marker: Some(">> b\n"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            lines.join(""),
+            r###"aaa
+bbb
+<< a
+222
+--
+333
+>> b
+"###
+        );
+        assert!(conflicts);
     }
 
     #[test]
@@ -1162,6 +1257,19 @@ bbb
             },
         );
         assert_eq!(ml.join(""), "aaa\n222\nbbb\n");
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            false,
+            &CustomMarkers {
+                start_marker: Some("<< a\n"),
+                mid_marker: Some("--\n"),
+                end_marker: Some(">> b\n"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(lines.join(""), "aaa\n222\nbbb\n");
+        assert!(!conflicts);
     }
 
     /// Both try to insert lines in the same place.
@@ -1225,6 +1333,29 @@ bbb
 bbb
 "###
         );
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            false,
+            &CustomMarkers {
+                start_marker: Some("<< a\n"),
+                mid_marker: Some("--\n"),
+                end_marker: Some(">> b\n"),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            lines.join(""),
+            r###"aaa
+<< a
+111
+--
+222
+>> b
+bbb
+"###
+        );
+        assert!(conflicts);
     }
 
     /// Both try to insert lines in the same place.
@@ -1271,6 +1402,12 @@ bbb
 
         let ml = m3.merge_lines(false, &StandardMarkers::new(Some("LAO"), Some("TAO")));
         assert_eq!(ml.join(""), MERGED_RESULT);
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3
+            .merge_lines_with_conflict_flag(false, &StandardMarkers::new(Some("LAO"), Some("TAO")));
+        assert_eq!(lines.join(""), MERGED_RESULT);
+        assert!(conflicts);
     }
 
     /// Test case from diff3 manual.
@@ -1303,6 +1440,16 @@ bbb
             .collect();
 
         assert_eq!(ml_s, result_s);
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3
+            .merge_lines_with_conflict_flag(false, &StandardMarkers::new(Some("LAO"), Some("TAO")));
+        let lines_s: Vec<String> = lines
+            .iter()
+            .map(|s| String::from_utf8_lossy(s).to_string())
+            .collect();
+        assert_eq!(lines_s, result_s);
+        assert!(conflicts);
     }
 
     /// Reprocessing.
@@ -1335,6 +1482,14 @@ bbb
         ]
         .concat();
         assert_eq!(optimal_text, merged_text);
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            true,
+            &StandardMarkers::new(Some("OTHER"), Some("THIS")),
+        );
+        assert_eq!(lines.join(""), optimal_text);
+        assert!(conflicts);
     }
 
     #[test]
@@ -1382,7 +1537,15 @@ bbb
             ">>>>>>> THIS\n".to_string(),
         ]
         .concat();
-        assert_eq!(optimal_text, merged_text)
+        assert_eq!(optimal_text, merged_text);
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            true,
+            &StandardMarkers::new(Some("OTHER"), Some("THIS")),
+        );
+        assert_eq!(lines.join(""), optimal_text);
+        assert!(conflicts);
     }
 
     #[test]
@@ -1414,6 +1577,14 @@ bbb
         ]
         .concat();
         assert_eq!(optimal_text, merged_text);
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            true,
+            &StandardMarkers::new(Some("OTHER"), Some("THIS")),
+        );
+        assert_eq!(lines.join(""), optimal_text);
+        assert!(conflicts);
     }
 
     #[test]
@@ -1444,6 +1615,14 @@ bbb
         ]
         .concat();
         assert_eq!(optimal_text, merged_text);
+
+        // Test merge_lines_with_conflict_flag
+        let (lines, conflicts) = m3.merge_lines_with_conflict_flag(
+            true,
+            &StandardMarkers::new(Some("OTHER"), Some("THIS")),
+        );
+        assert_eq!(lines.join(""), optimal_text);
+        assert!(conflicts);
     }
 
     /// Reprocessing and showing base breaks correctly.
