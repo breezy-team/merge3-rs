@@ -98,8 +98,8 @@ impl<'b, T: Eq + std::hash::Hash + std::fmt::Debug + ?Sized> Merge3<'b, T> {
             get_matching_blocks: |a, b| {
                 patiencediff::SequenceMatcher::new(a, b)
                     .get_matching_blocks()
-                    .into_iter()
-                    .map(|(first_start, second_start, size)| Match {
+                    .iter()
+                    .map(|&(first_start, second_start, size)| Match {
                         first_start,
                         second_start,
                         size,
@@ -1734,11 +1734,19 @@ mod tests {
         assert_eq!(m3.a.len(), 4);
         assert_eq!(m3.b.len(), 4);
 
-        // Should produce a conflict
+        // The two non-overlapping deletions (b removed in a, d removed in b)
+        // merge cleanly into separate one-sided regions, no conflict.
         let regions = m3.merge_regions();
-        assert!(regions
-            .iter()
-            .any(|r| matches!(r, MergeRegion::Conflict { .. })));
+        assert_eq!(
+            regions,
+            vec![
+                MergeRegion::Unchanged { start: 0, end: 1 },
+                MergeRegion::A { start: 1, end: 1 },
+                MergeRegion::Unchanged { start: 2, end: 3 },
+                MergeRegion::B { start: 3, end: 3 },
+                MergeRegion::Unchanged { start: 4, end: 5 },
+            ]
+        );
     }
 
     #[test]
